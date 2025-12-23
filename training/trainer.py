@@ -20,37 +20,34 @@ class GumbelTrainer:
         )
 
     def train_step(self, batch):
-        """
-        batch: (states, target_policies, target_values)
-        """
         states, target_policies, target_values = batch
         
+        # Mover datos a la GPU
         states = states.to(self.config.device)
         target_policies = target_policies.to(self.config.device)
         target_values = target_values.to(self.config.device)
 
         self.optimizer.zero_grad()
         
-        # Forward pass
+        # Predicción
         pred_policies, pred_values = self.network(states)
         
-        # 1. Value Loss (MSE)
-        # Queremos que el valor predicho se acerque al resultado real del juego
+        # Cálculo de Error (Loss)
         value_loss = F.mse_loss(pred_values, target_values)
         
-        # 2. Policy Loss (Cross Entropy / KL Divergence)
-        # Queremos que la red prediga la política "mejorada" por Gumbel Search
-        # LogSoftmax para estabilidad numérica
         log_pred_policies = F.log_softmax(pred_policies, dim=1)
-        
-        # KLDiv espera input en log-space y target en prob-space
-        # reduction='batchmean' es la forma matemáticamente correcta de KL
         policy_loss = F.kl_div(log_pred_policies, target_policies, reduction='batchmean')
         
         total_loss = value_loss + policy_loss
 
-        # Backward pass
+        # Retropropagación
         total_loss.backward()
+        
+        # --- CORRECCIÓN CLAVE: Gradient Clipping ---
+        # Esto evita que los números se vuelvan infinitos (NaN)
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=1.0)
+        # -------------------------------------------
+        
         self.optimizer.step()
         self.scheduler.step()
 
