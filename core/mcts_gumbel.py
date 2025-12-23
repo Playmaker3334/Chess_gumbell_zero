@@ -1,4 +1,3 @@
-
 import math
 import numpy as np
 import torch
@@ -111,3 +110,4 @@ class GumbelMCTS:
                  q_values[action] = root_v 
                  
         return q_values
+
