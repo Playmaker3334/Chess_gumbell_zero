@@ -1,3 +1,4 @@
+%%writefile Chess_gumbell_zero/training/self_play.py
 import torch
 import numpy as np
 from core.env_wrapper import ChessWrapper
@@ -11,36 +12,48 @@ def self_play_worker(config, network, replay_buffer, num_games=1):
     
     for _ in range(num_games):
         state = env.reset()
-        game_history = [] # (state, policy, player_color)
+        game_history = [] 
         done = False
-        
         moves_count = 0
         
         while not done:
             legal_actions = env.get_legal_actions()
             
-            # Si no hay movimientos legales (mate o ahogado)
             if not legal_actions:
                 break
                 
             # Ejecutar Gumbel Search
-            best_action, improved_policy, _ = mcts.run_search(state, network, legal_actions)
+            # counts: diccionario {accion_idx: numero_visitas}
+            best_action, _, counts = mcts.run_search(state, network, legal_actions)
             
-            # Guardar estado actual para entrenamiento
-            # Nota: Guardamos la policy completa (size 4672), GumbelMCTS ya nos la da formateada
-            game_history.append((state.clone(), improved_policy, env.board.turn))
+            # --- CORRECCIÓN MATEMÁTICA CRÍTICA ---
+            # Antes pasábamos 'improved_policy' (Q-values) lo que causaba NaN.
+            # Ahora construimos una distribución de probabilidad basada en Visitas.
+            # Esto garantiza valores entre 0 y 1.
             
-            # Aplicar acción al entorno
+            policy_target = np.zeros(config.action_space_size, dtype=np.float32)
+            total_visits = sum(counts.values())
+            
+            if total_visits > 0:
+                for action_idx, visit_count in counts.items():
+                    policy_target[action_idx] = visit_count / total_visits
+            else:
+                # Fallback por si acaso (distribución uniforme sobre legales)
+                for action_idx in legal_actions:
+                    policy_target[action_idx] = 1.0 / len(legal_actions)
+            
+            # Guardamos el tensor de probabilidad correcto
+            game_history.append((state.clone(), torch.tensor(policy_target), env.board.turn))
+            # -------------------------------------
+            
             state, reward, done = env.step(best_action)
             moves_count += 1
             
-            # Limite para evitar partidas infinitas al inicio
-            if moves_count > 200:
+            # Limite de movimientos para evitar bucles infinitos
+            if moves_count > 150:
                 done = True
-                reward = 0 # Tablas por aburrimiento
+                reward = 0 # Tablas
 
-        # Guardar partida en el buffer
-        # reward es relativo al último jugador. Ajustar lógica en replay_buffer
         replay_buffer.save_game(game_history, reward)
         
     return moves_count
