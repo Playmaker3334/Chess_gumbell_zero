@@ -1,3 +1,4 @@
+%%writefile core/mcts_gumbel.py
 import math
 import numpy as np
 import torch
@@ -27,7 +28,8 @@ class GumbelMCTS:
     def run_search(self, root_state, network, legal_actions):
         network.eval()
         with torch.no_grad():
-            # --- CORRECCIÓN 1: Mover input a GPU ---
+            # --- CORRECCIÓN: Mover input a GPU ---
+            # Usamos .to(device) para que coincida con la red neuronal
             root_input = root_state.to(self.config.device)
             policy_logits, root_value = network(root_input)
             # ---------------------------------------
@@ -86,11 +88,11 @@ class GumbelMCTS:
         
         if not node.expanded():
              with torch.no_grad():
-                # --- CORRECCIÓN 2: Mover input a GPU también en simulación ---
+                # --- CORRECCIÓN: Mover input a GPU también aquí ---
                 state_input = state_tensor.to(self.config.device)
                 _, value = network(state_input) 
                 leaf_value = value.item()
-                # -------------------------------------------------------------
+                # --------------------------------------------------
         else:
             leaf_value = node.value() 
 
@@ -110,4 +112,3 @@ class GumbelMCTS:
                  q_values[action] = root_v 
                  
         return q_values
-
