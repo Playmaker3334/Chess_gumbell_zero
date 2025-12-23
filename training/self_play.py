@@ -1,4 +1,3 @@
-%%writefile Chess_gumbell_zero/training/self_play.py
 import torch
 import numpy as np
 from core.env_wrapper import ChessWrapper
@@ -57,3 +56,4 @@ def self_play_worker(config, network, replay_buffer, num_games=1):
         replay_buffer.save_game(game_history, reward)
         
     return moves_count
+
