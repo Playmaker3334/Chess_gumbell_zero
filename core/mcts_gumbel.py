@@ -1,0 +1,115 @@
+import math
+import numpy as np
+import torch
+
+class Node:
+    def __init__(self, prior):
+        self.visit_count = 0
+        self.value_sum = 0
+        self.children = {}
+        self.prior = prior
+        self.q_value = 0
+
+    def expanded(self):
+        return len(self.children) > 0
+
+    def value(self):
+        if self.visit_count == 0:
+            return 0
+        return self.value_sum / self.visit_count
+
+class GumbelMCTS:
+    def __init__(self, config):
+        self.config = config
+        self.c_visit = config.c_visit
+        self.c_scale = config.c_scale
+
+    def run_search(self, root_state, network, legal_actions):
+        network.eval()
+        with torch.no_grad():
+            policy_logits, root_value = network(root_state)
+            policy_logits = policy_logits.cpu().numpy()[0]
+        
+        root = Node(0)
+        
+        legal_mask = np.full(policy_logits.shape, -np.inf)
+        legal_mask[legal_actions] = 0
+        masked_logits = policy_logits + legal_mask
+        
+        gumbel_noise = np.random.gumbel(size=masked_logits.shape)
+        perturbed_logits = masked_logits + gumbel_noise
+        
+        m = self.config.num_sampled_actions
+        top_k_indices = np.argsort(perturbed_logits)[-m:]
+        
+        for action in top_k_indices:
+            root.children[action] = Node(policy_logits[action])
+
+        self._sequential_halving(root, root_state, network, top_k_indices)
+        
+        counts = {a: child.visit_count for a, child in root.children.items()}
+        completed_q = self._compute_completed_q(root, policy_logits)
+        
+        best_action = max(root.children.items(), key=lambda x: x[1].q_value)[0]
+        
+        return best_action, completed_q, counts
+
+    def _sequential_halving(self, root, root_state, network, candidates):
+        n = self.config.num_simulations
+        m = len(candidates)
+        
+        if m == 0: return
+
+        while m > 1:
+            visits_per_action = max(1, n // (m * int(np.log2(m) + 1e-8)))
+            
+            for action in candidates:
+                for _ in range(visits_per_action):
+                    self._simulate(root, action, root_state, network)
+            
+            scores = []
+            for action in candidates:
+                node = root.children[action]
+                sigma = (self.c_visit + max(c.visit_count for c in root.children.values())) * self.c_scale
+                score = node.q_value + node.prior + sigma
+                scores.append((score, action))
+            
+            scores.sort(reverse=True)
+            m = m // 2
+            candidates = [a for s, a in scores[:m]]
+
+    def _simulate(self, root, action, state_tensor, network):
+        node = root.children[action]
+        
+        # In real env we would traverse tree, here depth=1 for simplicity/speed in standard MCTS
+        # For full tree, we need state cloning. Assuming simple depth 1 expansion for Gumbel base:
+        # Since we don't have a dynamics model (like MuZero), we can't easily traverse deep 
+        # without external simulator. We assume the value returned by network IS the simulation result.
+        
+        # Note: In AlphaZero/MuZero, we traverse until leaf.
+        # With Gumbel, we often do shallow planning or use model. 
+        # Here we use the Value Head as the evaluation of the leaf.
+        
+        if not node.expanded():
+             with torch.no_grad():
+                _, value = network(state_tensor) 
+                leaf_value = value.item()
+        else:
+            leaf_value = node.value() 
+
+        node.value_sum += leaf_value
+        node.visit_count += 1
+        node.q_value = node.value_sum / node.visit_count
+
+    def _compute_completed_q(self, root, logits):
+        q_values = np.copy(logits)
+        root_v = 0 
+        
+        for action, node in root.children.items():
+            if node.visit_count > 0:
+                q_values[action] = node.q_value
+                root_v += node.prior * node.q_value 
+            else:
+                 q_values[action] = root_v 
+                 
+        return q_values
