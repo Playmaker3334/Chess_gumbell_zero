@@ -1,4 +1,4 @@
-%%writefile Chess_gumbell_zero/core/env_wrapper.py
+
 import chess
 import numpy as np
 import torch
@@ -128,3 +128,4 @@ class ChessWrapper:
     def _coord_to_uci(self, r1, c1, r2, c2):
         files = "abcdefgh"
         return f"{files[c1]}{r1+1}{files[c2]}{r2+1}"
+
