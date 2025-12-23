@@ -1,3 +1,4 @@
+%%writefile Chess_gumbell_zero/core/env_wrapper.py
 import chess
 import numpy as np
 import torch
@@ -41,13 +42,16 @@ class ChessWrapper:
         planes = np.zeros((119, 8, 8), dtype=np.float32)
         
         current_turn = self.board.turn
+        moves_popped = [] # Lista para guardar movimientos y restaurarlos luego
         
+        # 1. Viajar al pasado y llenar planos
         for i in range(history_planes):
             if i > 0:
                 try:
-                    self.board.pop()
+                    move = self.board.pop() # Sacamos el movimiento
+                    moves_popped.append(move) # Lo guardamos
                 except IndexError:
-                    break
+                    break # Si no hay mas historial, paramos
             
             offset = i * 14
             
@@ -68,9 +72,12 @@ class ChessWrapper:
             if self.board.is_repetition(3):
                 planes[offset + 13][:][:] = 1
 
-        for _ in range(i):
-            self.board.push(self.board.move_stack[-(i-_)])
+        # 2. Restaurar el tablero (Push de vuelta los movimientos guardados)
+        # Debemos hacerlo en orden inverso (el ultimo que sacamos es el ultimo en volver)
+        for move in reversed(moves_popped):
+            self.board.push(move)
 
+        # 3. Planos globales (Castling, turn, etc)
         aux_offset = 112
         if self.board.turn == chess.BLACK:
             planes[aux_offset][:][:] = 1
