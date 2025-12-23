@@ -1,3 +1,4 @@
+
 import math
 import numpy as np
 import torch
@@ -27,9 +28,10 @@ class GumbelMCTS:
     def run_search(self, root_state, network, legal_actions):
         network.eval()
         with torch.no_grad():
-            # CORRECCION: Movemos el tensor a la GPU antes de pasarlo a la red
-            root_device = root_state.to(self.config.device)
-            policy_logits, root_value = network(root_device)
+            # --- CORRECCIÓN 1: Mover input a GPU ---
+            root_input = root_state.to(self.config.device)
+            policy_logits, root_value = network(root_input)
+            # ---------------------------------------
             policy_logits = policy_logits.cpu().numpy()[0]
         
         root = Node(0)
@@ -83,16 +85,13 @@ class GumbelMCTS:
     def _simulate(self, root, action, state_tensor, network):
         node = root.children[action]
         
-        # Nota: En implementacion real deberiamos avanzar el estado real del tablero.
-        # Aqui simplificamos usando el Value Head de la red sobre el estado raiz 
-        # (asumiendo profundidad 1 para la estimacion de valor en Gumbel simple).
-        
         if not node.expanded():
              with torch.no_grad():
-                # CORRECCION: Movemos el tensor a la GPU aqui tambien
-                state_device = state_tensor.to(self.config.device)
-                _, value = network(state_device) 
+                # --- CORRECCIÓN 2: Mover input a GPU también en simulación ---
+                state_input = state_tensor.to(self.config.device)
+                _, value = network(state_input) 
                 leaf_value = value.item()
+                # -------------------------------------------------------------
         else:
             leaf_value = node.value() 
 
