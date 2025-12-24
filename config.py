@@ -2,12 +2,17 @@ import torch
 
 class Config:
     def __init__(self):
-        # Detectar GPU automáticamente
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Detectar GPU automáticamente (MPS para Mac, CUDA para NVIDIA)
+        if torch.backends.mps.is_available():
+            self.device = "mps"
+        elif torch.cuda.is_available():
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
         
         # Configuración de Memoria
-        self.window_size = 10000
-        self.batch_size = 64
+        self.window_size = 50000
+        self.batch_size = 2048
         
         # Hiperparámetros de Entrenamiento
         self.training_steps = 1000000
@@ -35,3 +40,8 @@ class Config:
         self.observation_shape = (119, 8, 8)
         self.bottleneck_channels = 64
         self.broadcast_every_n = 8
+
+        # Self-play paralelo (M2 Max)
+        self.num_self_play_workers = 10  # Número de workers paralelos
+        self.games_per_worker = 1  # Partidas por worker antes de sincronizar
+        self.max_moves_per_game = 80  # Límite de movimientos por partida

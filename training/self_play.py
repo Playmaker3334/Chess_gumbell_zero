@@ -49,7 +49,8 @@ def self_play_worker(config, network, replay_buffer, num_games=1):
             moves_count += 1
             
             # Limite de movimientos para evitar bucles infinitos
-            if moves_count > 150:
+            max_moves = getattr(config, 'max_moves_per_game', 150)
+            if moves_count > max_moves:
                 done = True
                 reward = 0 # Tablas
 
