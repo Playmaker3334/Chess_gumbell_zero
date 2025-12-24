@@ -16,6 +16,8 @@ class ChessWrapper:
 
     def step(self, action_idx):
         move_uci = self.index_lookup.get(action_idx)
+        if move_uci is None:
+            return self.get_tensor(), -1, True
         move = chess.Move.from_uci(move_uci)
         if move in self.board.legal_moves:
             self.board.push(move)
