@@ -6,15 +6,12 @@ from core.mcts_gumbel import GumbelMCTS
 from core.network import ChessGumbelNet
 
 
-def _play_single_game(config, network_state_dict):
-    """Jugar una partida completa usando CPU."""
-    # Crear red local en CPU
+def _play_single_game(config, network_state_dict, should_log=False, game_id=0, training_step=0):
     network = ChessGumbelNet(config)
     network.load_state_dict(network_state_dict)
     network.to("cpu")
     network.eval()
 
-    # Forzar config a usar CPU para este worker
     config_cpu = type(config)()
     config_cpu.__dict__.update(config.__dict__)
     config_cpu.device = "cpu"
@@ -24,6 +21,7 @@ def _play_single_game(config, network_state_dict):
 
     state = env.reset()
     game_history = []
+    move_log = []
     done = False
     moves_count = 0
 
@@ -45,13 +43,17 @@ def _play_single_game(config, network_state_dict):
             for action_idx in legal_actions:
                 policy_target[action_idx] = 1.0 / len(legal_actions)
 
-        # Guardar sample pre-procesado (listo para el buffer)
         state_compressed = state.numpy().astype(np.float16)
         game_history.append({
             "state": state_compressed,
             "policy": policy_target,
             "player_color": env.board.turn
         })
+
+        if should_log:
+            move_uci = env.index_lookup.get(best_action)
+            if move_uci:
+                move_log.append(move_uci)
 
         state, reward, done = env.step(best_action)
         moves_count += 1
@@ -61,7 +63,6 @@ def _play_single_game(config, network_state_dict):
             done = True
             reward = 0
 
-    # Calcular value targets basados en resultado
     samples = []
     for sample in game_history:
         value_target = reward * (1 if sample["player_color"] else -1)
@@ -71,62 +72,84 @@ def _play_single_game(config, network_state_dict):
             "value": value_target
         })
 
-    return samples, moves_count
+    log_data = None
+    if should_log:
+        log_data = {
+            "game_id": game_id,
+            "training_step": training_step,
+            "moves": move_log,
+            "result": reward
+        }
+
+    return samples, moves_count, log_data
 
 
-def _worker_process(config, network_state_dict, result_queue, num_games):
-    """Proceso worker que juega múltiples partidas."""
+def _worker_process(config, network_state_dict, result_queue, num_games, log_game_idx=-1, game_id_start=0, training_step=0):
     total_moves = 0
     all_samples = []
+    log_data = None
 
-    for _ in range(num_games):
-        samples, moves = _play_single_game(config, network_state_dict)
+    for i in range(num_games):
+        should_log = (i == log_game_idx)
+        game_id = game_id_start + i
+        
+        samples, moves, game_log = _play_single_game(
+            config, 
+            network_state_dict, 
+            should_log=should_log,
+            game_id=game_id,
+            training_step=training_step
+        )
         all_samples.extend(samples)
         total_moves += moves
+        
+        if game_log is not None:
+            log_data = game_log
 
-    result_queue.put((all_samples, total_moves))
+    result_queue.put((all_samples, total_moves, log_data))
 
 
-def parallel_self_play(config, network, replay_buffer, num_workers=None, games_per_worker=1):
-    """
-    Ejecutar self-play en paralelo usando múltiples workers en CPU.
-
-    Args:
-        config: Configuración
-        network: Red neuronal (en GPU)
-        replay_buffer: Buffer compartido
-        num_workers: Número de procesos paralelos
-        games_per_worker: Partidas por worker
-
-    Returns:
-        total_moves: Total de movimientos generados
-    """
+def parallel_self_play(config, network, replay_buffer, num_workers=None, games_per_worker=1, game_logger=None, game_counter=0, training_step=0):
     if num_workers is None:
         num_workers = config.num_self_play_workers
 
-    # Copiar pesos de la red a CPU para compartir con workers
     network_state_dict = {k: v.cpu() for k, v in network.state_dict().items()}
 
     result_queue = mp.Queue()
     processes = []
 
-    # Lanzar workers
-    for _ in range(num_workers):
+    log_worker_idx = -1
+    log_game_idx = -1
+    
+    if game_logger is not None and config.log_games:
+        total_games = num_workers * games_per_worker
+        if game_counter % config.log_every_n_games < total_games:
+            log_worker_idx = (game_counter % config.log_every_n_games) // games_per_worker
+            log_game_idx = (game_counter % config.log_every_n_games) % games_per_worker
+
+    for worker_id in range(num_workers):
+        game_id_start = game_counter + worker_id * games_per_worker
+        worker_log_idx = log_game_idx if worker_id == log_worker_idx else -1
+        
         p = mp.Process(
             target=_worker_process,
-            args=(config, network_state_dict, result_queue, games_per_worker)
+            args=(config, network_state_dict, result_queue, games_per_worker, worker_log_idx, game_id_start, training_step)
         )
         p.start()
         processes.append(p)
 
-    # Recolectar resultados
     total_moves = 0
     for _ in range(num_workers):
-        samples, moves = result_queue.get()
+        samples, moves, log_data = result_queue.get()
         replay_buffer.add_samples(samples)
         total_moves += moves
+        
+        if log_data is not None and game_logger is not None:
+            game_logger.start_game(log_data["game_id"], log_data["training_step"])
+            for move_uci in log_data["moves"]:
+                game_logger.log_move(move_uci)
+            game_logger.end_game(log_data["result"])
 
-    # Esperar a que terminen todos
     for p in processes:
         p.join()
 
