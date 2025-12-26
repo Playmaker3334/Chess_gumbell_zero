@@ -12,6 +12,45 @@ from training.parallel_self_play import parallel_self_play
 from training.trainer import GumbelTrainer
 from evaluation.benchmark import Benchmarker
 from interpretability.game_logger import GameLogger
+from interpretability.gif_logger import GifLogger
+
+
+class CombinedLogger:
+    """Wrapper que combina GameLogger (txt) y GifLogger (gif)."""
+    
+    def __init__(self, text_logger, gif_logger):
+        self.text_logger = text_logger
+        self.gif_logger = gif_logger
+    
+    def start_game(self, game_id: int, training_step: int):
+        if self.text_logger:
+            self.text_logger.start_game(game_id, training_step)
+        if self.gif_logger:
+            self.gif_logger.start_game(game_id, training_step)
+    
+    def log_move(self, move_uci: str):
+        if self.text_logger:
+            self.text_logger.log_move(move_uci)
+        if self.gif_logger:
+            self.gif_logger.log_move(move_uci)
+    
+    def log_move_by_index(self, action_idx: int, index_lookup: dict):
+        if self.text_logger:
+            self.text_logger.log_move_by_index(action_idx, index_lookup)
+        if self.gif_logger:
+            self.gif_logger.log_move_by_index(action_idx, index_lookup)
+    
+    def end_game(self, result: float, reason=None):
+        if self.text_logger:
+            self.text_logger.end_game(result, reason)
+        if self.gif_logger:
+            self.gif_logger.end_game(result, reason)
+    
+    def close(self):
+        if self.text_logger:
+            self.text_logger.close()
+        if self.gif_logger:
+            self.gif_logger.close()
 
 
 def main():
@@ -20,6 +59,7 @@ def main():
     parser.add_argument("--model_path", type=str, default="checkpoints/latest.pt")
     parser.add_argument("--parallel", action="store_true", help="Usar self-play paralelo")
     parser.add_argument("--no-log", action="store_true", help="Desactivar logging de partidas")
+    parser.add_argument("--no-gif", action="store_true", help="Desactivar generacion de GIFs")
     args = parser.parse_args()
 
     config = Config()
@@ -43,7 +83,14 @@ def main():
         
         game_logger = None
         if config.log_games:
-            game_logger = GameLogger(log_dir=config.log_dir)
+            text_logger = GameLogger(log_dir=config.log_dir)
+            
+            gif_logger = None
+            if not args.no_gif:
+                gif_logger = GifLogger(output_dir="gifs", gif_every_n_games=config.log_every_n_games)
+                print(f"GIF logging enabled. GIFs will be saved to: gifs/")
+            
+            game_logger = CombinedLogger(text_logger, gif_logger)
             print(f"Game logging enabled. Logs will be saved to: {config.log_dir}/")
 
         if os.path.exists("data/buffer.pkl"):
